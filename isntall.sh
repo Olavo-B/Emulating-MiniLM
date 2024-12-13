@@ -67,6 +67,11 @@ else
     exit 1
 fi
 
+# Generate json file with the image name and info
+echo_info "Generating image info file: image_info.json"
+echo -e $IMAGE_NAME > misc/image_info.txt
+
+
 # Run the container with default settings
 echo_info "Running container: $IMAGE_NAME"
 docker run --gpus all --rm -it \

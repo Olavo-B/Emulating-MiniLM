@@ -6,13 +6,13 @@ This project aims to emulate the MiniLM model proposed by [Wang et al. (2020)](h
 
 ## Usage
 
-To install the docker image and all requiriments, run the following command:
+To install the docker image and all requiriments (This command will build and run the docker image), run the following command:
 
 ```bash
 chmod +x install.sh
-install.sh
+install.sh --help
 ```
-This command will build and run the docker image
+
 
 
 To just run the docker image, run the following command:
