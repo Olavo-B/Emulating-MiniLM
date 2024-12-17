@@ -36,7 +36,6 @@ class DistillationLoss(nn.Module):
         """
         super(DistillationLoss, self).__init__()
         self.temperature = temperature
-        self.kl_div = nn.KLDivLoss(reduction="batchmean")
 
     def _compute_attention_distribution(self, attention_scores):
         """
@@ -52,7 +51,7 @@ class DistillationLoss(nn.Module):
  
         
         # Apply softmax with temperature scaling
-        attention_dist = F.softmax(attention_scores / self.temperature, dim=-1)
+        attention_dist = F.softmax(attention_scores / self.temperature, dim=-1) + 1e-8
         return attention_dist
 
     def _compute_value_relation(self, values):
@@ -89,6 +88,13 @@ class DistillationLoss(nn.Module):
         Returns:
             torch.Tensor: Total distillation loss with LAT and VR scaling.
         """
+        # Ensure input tensors require gradients
+        student_A.requires_grad_(True)
+        theacher_A.requires_grad_(True)
+        student_values.requires_grad_(True)
+        teacher_values.requires_grad_(True)
+
+
         # Attention Distribution Transfer (LAT)
         student_A = self._compute_attention_distribution(student_A)
         theacher_A = self._compute_attention_distribution(theacher_A)
@@ -107,7 +113,7 @@ class DistillationLoss(nn.Module):
         student_value_relation = self._compute_value_relation(student_values)  # Shape: [batch, A_h, |x|, |x|]
 
         kl_value_relation = F.kl_div(
-            torch.log(student_value_relation), 
+            torch.log(student_value_relation+ 1e-8), 
             teacher_value_relation, 
             reduction="none"
         )  # Shape: [batch, A_h, |x|, |x|]

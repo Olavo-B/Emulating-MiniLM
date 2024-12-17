@@ -1,10 +1,13 @@
 import torch
 import torch.nn as nn
+from torch.optim import AdamW
 from torch.utils.data import Dataset, DataLoader
 from transformers import (
     BertTokenizer, BertForSequenceClassification, 
-    AdamW, get_linear_schedule_with_warmup, BertConfig
+     get_linear_schedule_with_warmup, BertConfig
 )
+
+
 from datasets import load_dataset
 import evaluate
 
@@ -20,8 +23,8 @@ from src.model.myTrasformers import ExtractQK
 # ==========================
 TASK_NAME = "sst2"  # GLUE Task (e.g., 'sst2', 'mrpc', etc.)
 BATCH_SIZE = 32  # Can be adjusted based on GPU capacity
-LEARNING_RATE = 5e-4  # Peak learning rate for the 6-layer model in the paper
-NUM_EPOCHS = 7  # Approximate number of epochs based on the paper
+LEARNING_RATE = 1e-5 # Peak learning rate for the 6-layer model in the paper
+NUM_EPOCHS = 100  # Approximate number of epochs based on the paper
 TEMPERATURE = 2.0  # Temperature for knowledge distillation
 SAVE_EVERY = 20  # Save the model every 20 epochs (can adjust based on preference)
 MODEL_SAVE_PATH = "./saved_models"  # Path to save the model
@@ -170,7 +173,10 @@ def train():
 
     # Load configuration and initialize the modified BERT
     config = BertConfig.from_pretrained("bert-base-uncased", num_labels=2)
-    teacher_model = BertForSequenceClassification.from_pretrained("bert-base-uncased", config=config)
+    teacher_model = BertForSequenceClassification.from_pretrained(
+        "bert-base-uncased",
+        config=config,
+        attn_implementation="eager")
     teacher_model.to(DEVICE)
 
     student_model = StudentBERT(
@@ -194,30 +200,40 @@ def train():
     metric = evaluate.load("glue", TASK_NAME)
 
     # Define loss function
-    distillation_loss = DistillationLoss(temperature=TEMPERATURE)
+    distillation_loss = DistillationLoss(temperature=TEMPERATURE).to(DEVICE)
 
     # Optimizer and Learning Rate Scheduler
-    optimizer = AdamW(student_model.parameters(), lr=LEARNING_RATE)
+    optimizer = AdamW(student_model.parameters(), lr=5e-4, 
+                      betas=(0.9, 0.999), weight_decay=0.01)
+    
     lr_scheduler = get_linear_schedule_with_warmup(
         optimizer, 
-        num_warmup_steps=0, 
+        num_warmup_steps=4000, 
         num_training_steps=len(train_dataloader) * NUM_EPOCHS
     )
+
+    print("Number of training steps:", len(train_dataloader) * NUM_EPOCHS)
+
+    # Gradient accumulation steps
+    accumulation_steps = 4
+    steps = 0
 
     # Criterion for classification loss
     classification_criterion = nn.CrossEntropyLoss()
 
-    # Training loop
+   # Training loop
     for epoch in range(1, NUM_EPOCHS + 1):
         student_model.train()
-        total_loss = 0.0
+        total_loss = 0.0  # Reset total_loss at the start of each epoch
+        i = 0  # Initialize steps
 
+        # Set up tqdm for progress tracking
         with tqdm(train_dataloader, desc=f"Epoch {epoch}/{NUM_EPOCHS}") as t:
             for batch in t:
                 # Move batch to device
                 batch = {k: v.to(DEVICE) for k, v in batch.items()}
 
-                # Teacher forward pass
+                # Teacher forward pass (no gradients required)
                 with torch.no_grad():
                     teacher_outputs = teacher_model(
                         input_ids=batch['input_ids'], 
@@ -230,13 +246,12 @@ def train():
                     attention_mask=batch['attention_mask'].unsqueeze(1).unsqueeze(2)
                 )
 
-                # Extract attention features 
+                # Extract attention features
                 teacher_attention_features = extract_self_attention_features(
                     teacher_model, 
                     batch['input_ids'], 
                     batch['attention_mask']
                 )
-                
                 student_attention_features = extract_self_attention_features(
                     student_model, 
                     batch['input_ids'], 
@@ -257,21 +272,32 @@ def train():
                 )
 
                 # Combined loss
-                total_batch_loss = knowledge_loss + classification_loss
+                total_batch_loss = knowledge_loss  # Combine both losses
+                # Gradient accumulation: normalize loss by accumulation steps
+                loss = total_batch_loss / accumulation_steps
 
-                # Backward pass
-                optimizer.zero_grad()
-                total_batch_loss.backward()
-                optimizer.step()
-                lr_scheduler.step()
+                # Backward pass (accumulate gradients)
+                loss.backward()
 
-                # Update tracking
+                # Update weights after 'accumulation_steps'
+                if (i + 1) % accumulation_steps == 0:
+                    optimizer.step()
+                    lr_scheduler.step()
+                    optimizer.zero_grad()
+
+                i += 1  # Increment iteration counter
+                steps += 1  # Increment global step counter
+
+                # Update total loss tracking
                 total_loss += total_batch_loss.item()
-                t.set_postfix(loss=total_batch_loss.item())
 
-        # Print epoch summary
+                # Update progress bar
+                t.set_postfix({'loss': total_batch_loss.item(), 'step': steps})
+
+        # End of epoch, print average loss
         avg_loss = total_loss / len(train_dataloader)
-        print(f"Epoch [{epoch}/{NUM_EPOCHS}] - Average Loss: {avg_loss:.4f}")
+        print(f"Epoch {epoch}/{NUM_EPOCHS} - Average Loss: {avg_loss:.4f}")
+
 
         # Save model periodically
         if epoch % SAVE_EVERY == 0:
