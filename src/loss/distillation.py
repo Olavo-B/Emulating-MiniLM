@@ -51,7 +51,7 @@ class DistillationLoss(nn.Module):
  
         
         # Apply softmax with temperature scaling
-        attention_dist = F.softmax(attention_scores / self.temperature, dim=-1) + 1e-8
+        attention_dist = F.softmax(attention_scores / self.temperature, dim=-1)
         return attention_dist
 
     def _compute_value_relation(self, values):
@@ -73,14 +73,14 @@ class DistillationLoss(nn.Module):
         return value_relation_dist
 
     def forward(self, 
-            theacher_A, teacher_values,
+            teacher_A, teacher_values,
             student_A, student_values):
         """
         Computes the distillation loss between teacher and student models 
         with proper LAT (attention transfer) and VR (value relation) scaling.
 
         Args:
-            theacher_A (torch.Tensor): Attention distribution from the teacher model
+            teacher_A (torch.Tensor): Attention distribution from the teacher model
             teacher_values (torch.Tensor): Value vectors from the teacher model
             student_A (torch.Tensor): Attention distribution from the student model
             student_values (torch.Tensor): Value vectors from the student model
@@ -88,39 +88,45 @@ class DistillationLoss(nn.Module):
         Returns:
             torch.Tensor: Total distillation loss with LAT and VR scaling.
         """
-        # Ensure input tensors require gradients
-        student_A.requires_grad_(True)
-        theacher_A.requires_grad_(True)
-        student_values.requires_grad_(True)
-        teacher_values.requires_grad_(True)
+
+        # Ensure all tensors require gradients
+        # Check gradients of relevant tensors
+
+        # Ensure all tensors involved in loss computation are part of the computation graph
 
 
-        # Attention Distribution Transfer (LAT)
         student_A = self._compute_attention_distribution(student_A)
-        theacher_A = self._compute_attention_distribution(theacher_A)
+        teacher_A = self._compute_attention_distribution(teacher_A)
+
         
+        # Attention Distribution Transfer (LAT) - KL Divergence
         kl_attention = F.kl_div(
-            torch.log(student_A), theacher_A, reduction="none"
+            torch.log(student_A + 1e-8),  # Log with stability added
+            teacher_A, reduction="none"
         )  # Shape: [batch, A_h, |x|, |x|]
 
         Ah = student_A.size(1)  # Number of attention heads
         X = student_A.size(2)   # Sequence length
 
+        # Summing over sequence positions and averaging over attention heads
         attention_transfer_loss = kl_attention.sum(dim=(-2, -1)).mean() / (Ah * X)
 
-        # Value Relation Transfer (VR)
-        teacher_value_relation = self._compute_value_relation(teacher_values)  # Shape: [batch, A_h, |x|, |x|]
-        student_value_relation = self._compute_value_relation(student_values)  # Shape: [batch, A_h, |x|, |x|]
+        # Value Relation Transfer (VR) - KL Divergence for value relations
+        teacher_value_relation = self._compute_value_relation(teacher_values)
+        student_value_relation = self._compute_value_relation(student_values)
 
         kl_value_relation = F.kl_div(
-            torch.log(student_value_relation+ 1e-8), 
-            teacher_value_relation, 
-            reduction="none"
+            torch.log(student_value_relation + 1e-8),  # Log with stability added
+            teacher_value_relation, reduction="none"
         )  # Shape: [batch, A_h, |x|, |x|]
 
+        # Summing over sequence positions and averaging over attention heads
         value_relation_loss = kl_value_relation.sum(dim=(-2, -1)).mean() / (Ah * X)
 
-        # Total loss
+        # Total loss as the sum of both components
         total_loss = attention_transfer_loss + value_relation_loss
+
+        # Ensure total loss requires gradients
+        assert total_loss.requires_grad, "Total loss must require gradients!"
 
         return total_loss

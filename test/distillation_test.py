@@ -1,6 +1,7 @@
 import unittest
 import torch
 from src.loss.distillation import DistillationLoss
+from torch.nn import functional as F
 
 # FILE: src/loss/test_distillation.py
 
@@ -14,14 +15,22 @@ class TestDistillationLoss(unittest.TestCase):
         # Create sample input tensors
         batch_size = 1
         num_heads = 1
-        seq_length = 3
+        seq_length = 2
         
         student_attention = torch.randn(batch_size, num_heads, seq_length, seq_length)
         teacher_attention = torch.randn(batch_size, num_heads, seq_length, seq_length)
         student_value_relation = torch.randn(batch_size, num_heads, seq_length, seq_length)
         teacher_value_relation = torch.randn(batch_size, num_heads, seq_length, seq_length)
 
-        # Scale of
+        student_attention.requires_grad = True
+        student_value_relation.requires_grad = True
+
+        print(student_attention)
+        print(teacher_attention)
+        print(student_value_relation)
+        print(teacher_value_relation)
+
+        print(F.kl_div(teacher_attention, student_attention, reduction='none'))
 
         # Call the forward method
         loss = self.loss_fn.forward(student_attention, teacher_attention, 

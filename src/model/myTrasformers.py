@@ -118,7 +118,7 @@ class MultiHeadAttention(nn.Module):
         # Multiply weights with values
         attn_output = torch.matmul(attn_weights, v)  # [batch_size, n_head, seq_len, d_k]
 
-        return attn_output, attention_scores
+        return attn_output, scores
 
     
 class FeedForward(nn.Module):
